@@ -1,0 +1,9 @@
+{
+  "functions": {
+    "api/**/*": {
+      "runtime": "@vercel/node@3.2.9",
+      "memory": 1024,
+      "maxDuration": 10
+    }
+  }
+}
