@@ -1,0 +1,16 @@
+{
+  "name": "implify-zimvie-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev",
+    "test": "node -e \"console.log('ok')\""
+  },
+  "dependencies": {
+    "@vercel/node": "3.2.9"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
