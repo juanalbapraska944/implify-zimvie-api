@@ -15,8 +15,8 @@ function toFloat(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
-const eqi = (a,b) => String(a||"").toLowerCase() === String(b||"").toLowerCase();
-const includesi = (h, n) => String(h||"").toLowerCase().includes(String(n||"").toLowerCase());
+const eqi = (a, b) => String(a || "").toLowerCase() === String(b || "").toLowerCase();
+const includesi = (h, n) => String(h || "").toLowerCase().includes(String(n || "").toLowerCase());
 const numEq = (a, b, eps = 0.05) => {
   const A = toFloat(a), B = toFloat(b);
   if (A === null || B === null) return false;
@@ -24,14 +24,28 @@ const numEq = (a, b, eps = 0.05) => {
 };
 
 function matchesWithQuery(prod, q) {
-  // Optional top-level filters
+  // Manufacturer filter
+  if (q.manufacturer) {
+    const brand = (prod.Hersteller || prod["Hersteller-name"] || "").toLowerCase();
+    const prodName = (prod.Produktname || "").toLowerCase();
+    const man = String(q.manufacturer).toLowerCase();
+    const isZimmerish = (txt) => txt.includes("zimvie") || txt.includes("zimmer");
+
+    if (man === "zimvie" || man === "zimmer") {
+      if (!(isZimmerish(brand) || isZimmerish(prodName))) return false;
+    } else {
+      if (!brand.includes(man) && !prodName.includes(man)) return false;
+    }
+  }
+
+  // Top-level filters
   if (q.category && !eqi(prod["Produktkategorie"], q.category)) return false;
   if (q.subcat && !eqi(prod["Untergruppe Produktkategorie"], q.subcat)) return false;
   if (q.q && !includesi(prod["Produktname"], q.q)) return false;
 
   const a = prod.attributes || {};
 
-  // Numeric
+  // Numeric attributes
   if (q.diameter_mm && !numEq(a.diameter_mm, q.diameter_mm)) return false;
   if (q.length_mm && !numEq(a.length_mm, q.length_mm)) return false;
   if (q.gingival_height_mm && !numEq(a.gingival_height_mm, q.gingival_height_mm)) return false;
@@ -39,7 +53,7 @@ function matchesWithQuery(prod, q) {
   if (q.retention_g && !numEq(a.retention_g, q.retention_g)) return false;
   if (q.pack_size && toFloat(a.pack_size) !== toFloat(q.pack_size)) return false;
 
-  // Strings
+  // String attributes
   if (q.collar && !eqi(a.collar, q.collar)) return false;
   if (q.rotation_protection && !eqi(a.rotation_protection, q.rotation_protection)) return false;
   if (q.abformung_type && !eqi(a.abformung_type, q.abformung_type)) return false;
@@ -64,24 +78,27 @@ function score(prod, q) {
   return s;
 }
 
-function filterRank(data, q, limit=25) {
-  const hits = data.filter(p => matchesWithQuery(p, q))
-    .map(p => ({p, s: score(p, q)}))
-    .sort((a,b) => b.s - a.s)
+function filterRank(data, q, limit = 25) {
+  const hits = data
+    .filter((p) => matchesWithQuery(p, q))
+    .map((p) => ({ p, s: score(p, q) }))
+    .sort((a, b) => b.s - a.s)
     .slice(0, limit)
-    .map(x => ({ ...x.p, _match_score: x.s }));
+    .map((x) => ({ ...x.p, _match_score: x.s }));
   return hits;
 }
 
-// NEW: conditional alternatives (based on the other filter)
+// Conditional alternatives
 function conditionalAlternatives(data, q) {
-  const pool = data.filter(p => {
+  const pool = data.filter((p) => {
     if (q.category && !eqi(p["Produktkategorie"], q.category)) return false;
     if (q.subcat && !eqi(p["Untergruppe Produktkategorie"], q.subcat)) return false;
+    if (q.manufacturer && !matchesWithQuery(p, { manufacturer: q.manufacturer })) return false;
     return true;
   });
-  const byDia = new Map();   // diameter -> Set(GH)
-  const byGH  = new Map();   // GH -> Set(diameter)
+
+  const byDia = new Map(); // diameter → Set(GH)
+  const byGH = new Map(); // GH → Set(diameter)
 
   for (const p of pool) {
     const a = p.attributes || {};
@@ -97,12 +114,9 @@ function conditionalAlternatives(data, q) {
     }
   }
 
-  const sortNums = arr => Array.from(arr).sort((x,y)=>x-y);
+  const sortNums = (arr) => Array.from(arr).sort((x, y) => x - y);
 
-  const out = { 
-    conditioned_on_diameter: {}, 
-    conditioned_on_gingival_height: {} 
-  };
+  const out = { conditioned_on_diameter: {}, conditioned_on_gingival_height: {} };
   for (const [d, set] of byDia.entries()) out.conditioned_on_diameter[d] = sortNums(set);
   for (const [gh, set] of byGH.entries()) out.conditioned_on_gingival_height[gh] = sortNums(set);
   return out;
@@ -110,11 +124,12 @@ function conditionalAlternatives(data, q) {
 
 export default async function handler(req, res) {
   const data = loadDB();
-  const src = req.method === "POST" ? (req.body || {}) : (req.query || {});
+  const src = req.method === "POST" ? req.body || {} : req.query || {};
   const q0 = {
     q: src.q ?? "",
     category: src.category ?? "",
     subcat: src.subcat ?? src["Untergruppe Produktkategorie"] ?? "",
+    manufacturer: src.manufacturer ?? "",
     diameter_mm: src.diameter_mm ?? "",
     length_mm: src.length_mm ?? "",
     gingival_height_mm: src.gingival_height_mm ?? "",
@@ -129,10 +144,10 @@ export default async function handler(req, res) {
     limit: Number(src.limit ?? 25),
   };
 
-  // 1) Try strict
+  // Strict results
   let results = filterRank(data, q0, q0.limit);
 
-  // 2) If none, relax step-by-step (keep category/subcat if present)
+  // Relax if empty
   const relaxOrder = [
     "gingival_height_mm",
     "diameter_mm",
@@ -142,7 +157,7 @@ export default async function handler(req, res) {
     "rotation_protection",
     "variant",
     "type",
-    "q"
+    "q",
   ];
   let relaxed_by = [];
   if (results.length === 0) {
@@ -158,17 +173,26 @@ export default async function handler(req, res) {
     }
   }
 
-  // 3) Conditional alternatives (much more useful)
+  // Conditional alternatives
   const alts = conditionalAlternatives(data, q0);
 
-  // 4) “missing_fields”: don’t force subcat; only suggest it
+  // Soft guidance per subcat
+  const MUST = {
+    Gingivaformer: ["diameter_mm"],
+    Abformpfosten: ["abformung_type"],
+    Abutment: [],
+  };
   const missing_fields = [];
-  if (!q0.subcat) missing_fields.push("Untergruppe Produktkategorie (optional but helpful: z.B. Gingivaformer, Abformpfosten, Abutment)");
+  if (q0.subcat && MUST[q0.subcat]) {
+    for (const f of MUST[q0.subcat]) {
+      if (!q0[f]) missing_fields.push(f);
+    }
+  }
 
   res.status(200).json({
     results,
     alternatives: alts,
     relaxed_by,
-    missing_fields
+    missing_fields,
   });
 }
